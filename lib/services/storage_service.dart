@@ -12,17 +12,11 @@ class StorageService extends ChangeNotifier {
   late Box<dynamic> _keysBox;
 
   String? _deviceId;
-  late final Future<void> _initFuture;
+  bool _initialized = false;
 
-  StorageService() {
-    _initFuture = _init();
-  }
-
-  Future<void> init() {
-    return _initFuture;
-  }
-
-  Future<void> _init() async {
+  Future<void> init() async {
+    if (_initialized) return;
+    _initialized = true;
     _messagesBox = Hive.box<Message>(kMessagesBox);
     _peersBox = Hive.box<Peer>(kPeersBox);
     _keysBox = Hive.box<dynamic>(kKeysBox);
@@ -36,7 +30,7 @@ class StorageService extends ChangeNotifier {
   String getDeviceId() => _deviceId ?? Uuid().v4();
 
   // Keys
-  Future<KeyPair?> getKeyPair() async {
+  KeyPair? getKeyPair() {
     return _keysBox.get('keypair') as KeyPair?;
   }
 

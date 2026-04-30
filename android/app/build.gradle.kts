@@ -21,7 +21,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.mesh_chat"
-        minSdk = flutter.minSdkVersion  // Required for Bluetooth LE, Nearby WiFi, background location
+        minSdk = 24  // Required: nearby_connections needs API 24+, flutter_blue_plus needs 21+
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
