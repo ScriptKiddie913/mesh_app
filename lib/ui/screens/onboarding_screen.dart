@@ -1,14 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:uuid/uuid.dart';
 import '../../services/storage_service.dart';
 import '../../services/mesh_service.dart';
 import '../../services/crypto_service.dart';
-import '../../models/key_pair.dart';
-import '../../utils/constants.dart';
 import 'peers_screen.dart';
+import '../../utils/theme.dart';
+import '../widgets/mesh_widgets.dart';
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
@@ -18,235 +16,152 @@ class OnboardingScreen extends StatefulWidget {
 }
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
-  final _usernameController = TextEditingController();
-  bool _loading = false;
-  String? _status;
+  final _nameController = TextEditingController();
+  bool _isSaving = false;
 
   @override
   void initState() {
     super.initState();
-    _checkExistingUser();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkExistingUser());
   }
 
-  Future<void> _checkExistingUser() async {
+Future<void> _checkExistingUser() async {
     final storage = context.read<StorageService>();
     final username = storage.getUsername();
-    if (username != null && username.isNotEmpty) {
-      // Already onboarded — go to peers
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const PeersScreen()),
-          );
-        }
-      });
+    
+    if (username != null) {
+      // Check if keypair exists, generate if not (now synchronous)
+      final keyPair = storage.getKeyPair();
+      if (keyPair == null) {
+        final newKeyPair = CryptoService.generateKeyPair();
+        await storage.saveKeyPair(newKeyPair);
+      }
+      
+      await _requestPermissions();
+      final mesh = context.read<MeshService>();
+      await mesh.start();
+      _navigateToPeers();
     }
   }
 
-  @override
-  void dispose() {
-    _usernameController.dispose();
-    super.dispose();
+  Future<void> _requestPermissions() async {
+    await [
+      Permission.location,
+      Permission.bluetooth,
+      Permission.bluetoothScan,
+      Permission.bluetoothConnect,
+      Permission.bluetoothAdvertise,
+      Permission.nearbyWifiDevices,
+    ].request();
+  }
+
+  void _navigateToPeers() {
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const PeersScreen()),
+    );
+  }
+
+Future<void> _saveProfile() async {
+    if (_nameController.text.trim().isEmpty) return;
+    setState(() => _isSaving = true);
+    
+    try {
+      final storage = context.read<StorageService>();
+      await storage.saveUsername(_nameController.text.trim());
+      
+      // Generate keypair for encryption and mesh messaging
+      final keyPair = CryptoService.generateKeyPair();
+      await storage.saveKeyPair(keyPair);
+      
+      final mesh = context.read<MeshService>();
+      await mesh.start();
+      
+      _navigateToPeers();
+    } catch (e) {
+      debugPrint('Profile save error: $e');
+      setState(() => _isSaving = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: MeshTheme.bg0,
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(MeshTheme.s6),
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Container(
-                decoration: BoxDecoration(
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF00D1FF).withValues(alpha: 0.3),
-                      blurRadius: 20,
-                      spreadRadius: 5,
+              const SizedBox(height: MeshTheme.s10),
+              TacticalCard(
+                borderColor: MeshTheme.accent,
+                tag: 'LOGO',
+                child: Column(
+                  children: [
+                    Image.asset(
+                      'assets/images/logo.png',
+                      height: 120,
+                      errorBuilder: (context, error, stackTrace) => 
+                          const Icon(Icons.security, size: 80, color: MeshTheme.accent),
                     ),
+                    const SizedBox(height: MeshTheme.s4),
+                    const Text(
+                      'soTaNik_AI Mesh CHAT',
+                      style: TextStyle(
+                        fontFamily: MeshTheme.fontMono,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 4,
+                        color: MeshTheme.accent,
+                      ),
+                    ),
+                    const StatusBadge(label: 'READY', color: MeshTheme.accentG, blink: true),
                   ],
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: Image.asset(
-                    'assets/images/logo.jpg',
-                    width: 120,
-                    height: 120,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) => 
-                        const Icon(Icons.security, size: 80, color: Color(0xFF00D1FF)),
-                  ),
                 ),
               ),
-              const SizedBox(height: 32),
-              Text(
-                'SoTaNIk_AI Mesh',
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 2.0,
-                  color: const Color(0xFFE6F1FF),
-                ),
-              ),
-              const SizedBox(height: 16),
+              const SizedBox(height: MeshTheme.s8),
+              const SectionDivider('SYSTEM INITIALIZATION'),
+              const SizedBox(height: MeshTheme.s4),
               const Text(
-                'SECURE DECENTRALIZED MESH COMMUNICATION\nOFFLINE CAPABLE',
+                'ENTER OPERATOR DESIGNATION TO LINK WITH DECENTRALIZED NETWORK',
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Color(0xFF8892B0),
-                  letterSpacing: 1.2,
-                  fontSize: 12,
-                ),
+                style: TextStyle(fontSize: 12, color: MeshTheme.textSec, height: 1.5),
               ),
-              const SizedBox(height: 48),
+              const SizedBox(height: MeshTheme.s6),
               TextField(
-                controller: _usernameController,
+                controller: _nameController,
+                style: const TextStyle(color: MeshTheme.textPri, fontFamily: MeshTheme.fontMono),
                 decoration: InputDecoration(
-                  labelText: 'OPERATIVE ID',
-                  labelStyle: const TextStyle(color: Color(0xFF8892B0), letterSpacing: 1.5),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF3A86FF)),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF112240)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF00D1FF)),
-                  ),
-                  prefixIcon: const Icon(Icons.person_outline, color: Color(0xFF00D1FF)),
                   filled: true,
-                  fillColor: const Color(0xFF112240).withValues(alpha: 0.5),
-                ),
-                enabled: !_loading,
-              ),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                height: 48,
-                child: ElevatedButton.icon(
-                  onPressed: _loading ? null : _completeOnboarding,
-                  icon: _loading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                              color: Color(0xFF00D1FF), strokeWidth: 2))
-                      : const Icon(Icons.login),
-                  label: Text(
-                    _loading ? 'INITIALIZING...' : 'START TACCOM',
-                    style: const TextStyle(letterSpacing: 1.5),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF112240),
-                    foregroundColor: const Color(0xFF00D1FF),
-                    side: const BorderSide(color: Color(0xFF3A86FF)),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
+                  fillColor: MeshTheme.bg1,
+                  hintText: 'CODENAME...',
+                  hintStyle: const TextStyle(color: MeshTheme.textDim),
+                  border: const OutlineInputBorder(borderRadius: MeshTheme.sharp, borderSide: BorderSide(color: MeshTheme.border)),
+                  enabledBorder: const OutlineInputBorder(borderRadius: MeshTheme.sharp, borderSide: BorderSide(color: MeshTheme.border)),
+                  focusedBorder: const OutlineInputBorder(borderRadius: MeshTheme.sharp, borderSide: BorderSide(color: MeshTheme.accent)),
                 ),
               ),
-              if (_status != null) ...[
-                const SizedBox(height: 12),
-                Text(_status!,
-                    style: const TextStyle(
-                        color: Color(0xFF00D1FF), fontSize: 13, letterSpacing: 1.1)),
-              ],
-              const SizedBox(height: 16),
-              TextButton.icon(
-                onPressed: _loading ? null : _requestPermissions,
-                icon: const Icon(Icons.security),
-                label:
-                    const Text('AUTHORIZE SYSTEM ACCESS', style: TextStyle(letterSpacing: 1.2)),
-                style: TextButton.styleFrom(
-                  foregroundColor: const Color(0xFF8892B0),
-                ),
+              const SizedBox(height: MeshTheme.s8),
+              _isSaving 
+                ? const CircularProgressIndicator(color: MeshTheme.accent)
+                : TacticalButton(
+                    label: 'INITIALIZE LINK',
+                    onTap: _saveProfile,
+                    filled: true,
+                    icon: Icons.power_settings_new,
+                  ),
+              const SizedBox(height: MeshTheme.s10),
+              const Text(
+                'ENCRYPTION: RSA-2048 / AES-256 GCM\nPROTO: GOOGLE NEARBY P2P\nAUTONOMOUS RELAY ENABLED',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontFamily: MeshTheme.fontMono, fontSize: 10, color: MeshTheme.textDim),
               ),
             ],
           ),
         ),
       ),
     );
-  }
-
-  Future<void> _completeOnboarding() async {
-    final username = _usernameController.text.trim();
-    if (username.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a username')),
-      );
-      return;
-    }
-
-    setState(() {
-      _loading = true;
-      _status = 'Requesting permissions...';
-    });
-
-    try {
-      await _requestPermissions();
-
-      if (!mounted) return;
-      setState(() => _status = 'Generating encryption keys...');
-
-      // Run RSA key generation in a background isolate to avoid UI freeze
-      final rawKeys = await compute(CryptoService.generateKeyPairRaw, null);
-      final keyPair = KeyPair(
-        privateKey: rawKeys['private']!,
-        publicKey: rawKeys['public']!,
-      );
-
-      if (!mounted) return;
-      setState(() => _status = 'Saving profile...');
-
-      final storage = Provider.of<StorageService>(context, listen: false);
-      final deviceId = const Uuid().v4();
-      await storage.saveUsername(username);
-      await storage.saveKeyPair(keyPair, deviceId);
-
-      if (!mounted) return;
-
-      // Auto-start mesh service
-      final mesh = context.read<MeshService>();
-      await mesh.start();
-
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const PeersScreen()),
-      );
-    } catch (e) {
-      if (mounted) {
-        setState(() => _status = 'Error: $e');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  Future<void> _requestPermissions() async {
-    await [
-      Permission.bluetooth,
-      Permission.bluetoothScan,
-      Permission.bluetoothAdvertise,
-      Permission.bluetoothConnect,
-      Permission.location,
-      Permission.locationWhenInUse,
-      Permission.nearbyWifiDevices,
-    ].request();
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Permissions requested')),
-      );
-    }
   }
 }

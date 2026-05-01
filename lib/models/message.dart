@@ -30,6 +30,9 @@ class Message extends HiveObject {
   @HiveField(8)
   bool delivered;
 
+  @HiveField(9)
+  int priorityIndex; // 0=normal, 1=important, 2=critical
+
   Message({
     required this.id,
     required this.senderId,
@@ -40,19 +43,21 @@ class Message extends HiveObject {
     this.ttl = 3600,
     this.hops = 0,
     this.delivered = false,
+    this.priorityIndex = 0,
   });
 
   factory Message.fromJson(Map<String, dynamic> json) {
     return Message(
-      id: json['id'] as String? ?? '',
-      senderId: json['senderId'] as String? ?? '',
-      receiverId: json['receiverId'] as String? ?? '',
-      type: json['type'] as String? ?? 'text',
-      payload: json['payload'] as String? ?? '',
-      timestamp: (json['timestamp'] as num?)?.toInt() ?? 0,
+      id: (json['id'] as String?) ?? '',
+      senderId: (json['senderId'] as String?) ?? '',
+      receiverId: (json['receiverId'] as String?) ?? '',
+      type: (json['type'] as String?) ?? 'text',
+      payload: (json['payload'] as String?) ?? '',
+      timestamp: (json['timestamp'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch,
       ttl: (json['ttl'] as num?)?.toInt() ?? 3600,
       hops: (json['hops'] as num?)?.toInt() ?? 0,
-      delivered: json['delivered'] as bool? ?? false,
+      delivered: (json['delivered'] as bool?) ?? false,
+      priorityIndex: (json['priorityIndex'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -67,6 +72,7 @@ class Message extends HiveObject {
       'ttl': ttl,
       'hops': hops,
       'delivered': delivered,
+      'priorityIndex': priorityIndex,
     };
   }
 }

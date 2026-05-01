@@ -45,7 +45,7 @@
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     
     <application
-        android:label="SoTaNIk_AI Mesh"
+        android:label="soTaNik_AI Mesh CHAT"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

@@ -9,34 +9,6 @@ class CryptoService {
   static final _secureRandom = Random.secure();
   static const int _keySize = 2048;
 
-  /// Generate raw key bytes — safe to call inside compute() isolate
-  static Map<String, Uint8List> generateKeyPairRaw(dynamic _) {
-    final random = FortunaRandom();
-    final seed = Uint8List(32);
-    final sr = Random.secure();
-    for (int i = 0; i < 32; i++) {
-      seed[i] = sr.nextInt(256);
-    }
-    random.seed(KeyParameter(seed));
-
-    final params = RSAKeyGeneratorParameters(
-      BigInt.parse('65537'),
-      _keySize,
-      64,
-    );
-    final generator = RSAKeyGenerator();
-    generator.init(ParametersWithRandom(params, random));
-
-    final pair = generator.generateKeyPair();
-    final publicKey = pair.publicKey as RSAPublicKey;
-    final privateKey = pair.privateKey as RSAPrivateKey;
-
-    return {
-      'private': _serializeRSAPrivateKey(privateKey),
-      'public': _serializeRSAPublicKey(publicKey),
-    };
-  }
-
   /// Generate RSA keypair using pointycastle
   static KeyPair generateKeyPair() {
     final random = FortunaRandom();
@@ -75,7 +47,7 @@ class CryptoService {
       final aesEncrypter = Encrypter(AES(aesKey, mode: AESMode.cbc));
       final encryptedPayload = aesEncrypter.encrypt(plaintext, iv: iv);
       final rsaPublicKey = _parseRSAPublicKey(recipientPublicKey);
-      final rsaEngine = PKCS1Encoding(RSAEngine())
+      final rsaEngine = RSAEngine()
         ..init(true, PublicKeyParameter<RSAPublicKey>(rsaPublicKey));
       final encryptedAesKey = rsaEngine.process(aesKey.bytes);
 
@@ -83,12 +55,11 @@ class CryptoService {
         'iv': base64Encode(iv.bytes),
         'ciphertext': encryptedPayload.base64,
         'aesKey': base64Encode(encryptedAesKey),
-        'encrypted': true,
       };
       
       return base64Encode(utf8.encode(jsonEncode(combined)));
     } catch (_) {
-      return plaintext; // Fallback to plaintext if encryption fails entirely
+      return base64Encode(utf8.encode(plaintext));
     }
   }
 
@@ -101,21 +72,22 @@ class CryptoService {
       final decoded = utf8.decode(base64Decode(encryptedPayloadB64));
       final combined = jsonDecode(decoded) as Map<String, dynamic>;
       
-      if (combined['encrypted'] != true) return encryptedPayloadB64;
-
       final iv = IV.fromBase64(combined['iv'] as String);
       final ciphertext = combined['ciphertext'] as String;
       final encryptedAesKey = base64Decode(combined['aesKey'] as String);
       final rsaPrivateKey = _parseRSAPrivateKey(privateKey);
-      final rsaEngine = PKCS1Encoding(RSAEngine())
+      final rsaEngine = RSAEngine()
         ..init(false, PrivateKeyParameter<RSAPrivateKey>(rsaPrivateKey));
       final aesKeyBytes = rsaEngine.process(encryptedAesKey);
 
       final aesEncrypter = Encrypter(AES(Key(aesKeyBytes), mode: AESMode.cbc));
       return aesEncrypter.decrypt(Encrypted.fromBase64(ciphertext), iv: iv);
     } catch (_) {
-      // If any decryption fails, return the original payload so we don't leak JSON
-      return encryptedPayloadB64;
+      try {
+        return utf8.decode(base64Decode(encryptedPayloadB64));
+      } catch (_) {
+        return encryptedPayloadB64;
+      }
     }
   }
 

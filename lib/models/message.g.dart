@@ -26,13 +26,14 @@ class MessageAdapter extends TypeAdapter<Message> {
       ttl: fields[6] as int,
       hops: fields[7] as int,
       delivered: fields[8] as bool,
+      priorityIndex: fields[9] as int,
     );
   }
 
   @override
   void write(BinaryWriter writer, Message obj) {
     writer
-      ..writeByte(9)
+      ..writeByte(10)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -50,7 +51,9 @@ class MessageAdapter extends TypeAdapter<Message> {
       ..writeByte(7)
       ..write(obj.hops)
       ..writeByte(8)
-      ..write(obj.delivered);
+      ..write(obj.delivered)
+      ..writeByte(9)
+      ..write(obj.priorityIndex);
   }
 
   @override

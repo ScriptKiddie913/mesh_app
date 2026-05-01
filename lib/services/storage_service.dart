@@ -29,7 +29,7 @@ class StorageService extends ChangeNotifier {
 
   String getDeviceId() => _deviceId ?? Uuid().v4();
 
-  // Keys
+  // Keys - SYNCHRONOUS like working mesh_app
   KeyPair? getKeyPair() {
     return _keysBox.get('keypair') as KeyPair?;
   }

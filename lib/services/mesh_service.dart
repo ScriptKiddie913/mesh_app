@@ -3,26 +3,29 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
-import 'package:latlong2/latlong.dart';
-import 'package:geolocator/geolocator.dart';
 import '../models/message.dart';
 import '../models/peer.dart';
+import '../models/enums.dart';
 import 'storage_service.dart';
 import 'nearby_service.dart';
 import 'crypto_service.dart';
+import 'location_service.dart';
 import '../utils/constants.dart';
 
 class MeshService extends ChangeNotifier {
-  MeshService(this._storage);
+  MeshService(this._storage) {
+    _location = LocationService(this);
+  }
 
   final StorageService _storage;
+  late final LocationService _location;
+  LocationService get locationService => _location;
   NearbyService? _nearby;
   bool _isRunning = false;
   bool _isScanning = false;
   String? _error;
   final Map<String, Peer> _discoveredPeers = {};
 
-  // Maps temporary endpointId to persistent deviceId and vice versa
   final Map<String, String> _endpointToDeviceId = {};
   final Map<String, String> _deviceIdToEndpoint = {};
 
@@ -34,7 +37,6 @@ class MeshService extends ChangeNotifier {
 
   Future<void> init() async {
     await _storage.init();
-    // Load previously saved peers
     for (final p in _storage.getPeers()) {
       _discoveredPeers[p.id] = p;
     }
@@ -83,6 +85,7 @@ class MeshService extends ChangeNotifier {
 
       await _nearby!.startAdvertising();
       await _nearby!.startDiscovery();
+      await _location.startLocationSharing();
 
       _isRunning = true;
       _isScanning = true;
@@ -90,13 +93,13 @@ class MeshService extends ChangeNotifier {
       notifyListeners();
     } catch (e) {
       _error = 'Mesh start failed: $e';
-      debugPrint('[MeshService] Start error: $e');
       notifyListeners();
     }
   }
 
   Future<void> stop() async {
     await _nearby?.stop();
+    _location.stop();
     _isRunning = false;
     _isScanning = false;
     notifyListeners();
@@ -106,8 +109,6 @@ class MeshService extends ChangeNotifier {
     final endpointId = _deviceIdToEndpoint[peer.id];
     if (endpointId != null) {
       await _nearby?.connectToPeer(endpointId);
-    } else {
-      debugPrint('[MeshService] No endpoint found for peer ${peer.id}');
     }
   }
 
@@ -139,45 +140,6 @@ class MeshService extends ChangeNotifier {
     notifyListeners();
   }
 
-  final Map<String, LatLng> _peerLocations = {};
-  bool _isSharingLocation = false;
-  Timer? _locationTimer;
-
-  bool get isSharingLocation => _isSharingLocation;
-  Map<String, LatLng> get peerLocations => Map.unmodifiable(_peerLocations);
-
-  void toggleLocationSharing(bool share) {
-    _isSharingLocation = share;
-    notifyListeners();
-    if (share) {
-      _startLocationBroadcast();
-    } else {
-      _locationTimer?.cancel();
-      // Broadcast stop signal
-      sendMessage(receiverId: '', type: 'stop_location', content: '');
-    }
-  }
-
-  void _startLocationBroadcast() {
-    _locationTimer?.cancel();
-    _locationTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
-      if (!_isSharingLocation) {
-        timer.cancel();
-        return;
-      }
-      try {
-        final pos = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high,
-        );
-        await sendMessage(
-          receiverId: '',
-          type: 'location',
-          content: '${pos.latitude},${pos.longitude}',
-        );
-      } catch (_) {}
-    });
-  }
-
   void _handlePeerConnected(String endpointId) async {
     final deviceId = _endpointToDeviceId[endpointId];
     if (deviceId == null) return;
@@ -189,8 +151,7 @@ class MeshService extends ChangeNotifier {
       _storage.savePeer(existing);
       notifyListeners();
 
-      // Key Exchange
-      final keyPair = _storage.getKeyPair();
+      final keyPair = await _storage.getKeyPair();
       if (keyPair != null) {
         await _nearby?.sendMessage(endpointId, {
           'id': const Uuid().v4(),
@@ -216,8 +177,6 @@ class MeshService extends ChangeNotifier {
       _storage.savePeer(existing);
       notifyListeners();
     }
-    _peerLocations.remove(deviceId);
-    notifyListeners();
   }
 
   void _handlePeerLost(String? endpointId) {
@@ -226,7 +185,6 @@ class MeshService extends ChangeNotifier {
       final deviceId = _endpointToDeviceId.remove(endpointId);
       if (deviceId != null) {
         _deviceIdToEndpoint.remove(deviceId);
-        _peerLocations.remove(deviceId);
         notifyListeners();
       }
     }
@@ -234,35 +192,27 @@ class MeshService extends ChangeNotifier {
 
   void _handleMessageReceived(String endpointId, Map<String, dynamic> data) async {
     try {
+      if (data['type'] == 'location_update') {
+        _handleLocationUpdate(endpointId, data);
+        return;
+      }
+
       final msg = Message.fromJson(data);
       if (_storage.isSeen(msg.id)) return;
 
-      // Handle system messages (Key Exchange, Location)
       if (msg.type == 'key_exchange') {
         _storage.markSeen(msg.id);
         final existing = _discoveredPeers[msg.senderId];
         if (existing != null) {
-          existing.publicKeyHash = msg.payload; // Store Base64 public key here
+          existing.publicKeyHash = msg.payload;
           _storage.savePeer(existing);
-        }
-      } else if (msg.type == 'location') {
-        _storage.markSeen(msg.id);
-        final parts = msg.payload.split(',');
-        if (parts.length == 2) {
-          _peerLocations[msg.senderId] = LatLng(double.parse(parts[0]), double.parse(parts[1]));
           notifyListeners();
         }
-      } else if (msg.type == 'stop_location') {
-        _storage.markSeen(msg.id);
-        _peerLocations.remove(msg.senderId);
-        notifyListeners();
       } else {
-        // Standard payload message
         final isForUs = msg.receiverId == _storage.getDeviceId() || msg.receiverId.isEmpty;
         if (isForUs) {
-          // Decrypt if it's E2E encrypted text or image
           if (msg.type == 'text' || msg.type == 'image') {
-            final keyPair = _storage.getKeyPair();
+            final keyPair = await _storage.getKeyPair();
             if (keyPair != null) {
               msg.payload = CryptoService.decryptPayload(
                 encryptedPayloadB64: msg.payload,
@@ -271,13 +221,13 @@ class MeshService extends ChangeNotifier {
             }
           }
           _storage.saveMessage(msg);
+          notifyListeners();
         } else {
           _storage.markSeen(msg.id);
         }
       }
 
-      // Relay flooded messages (only text/image, or locations if hops < 2 to prevent network storm)
-      if (msg.hops < kMaxHops && (msg.type == 'text' || msg.type == 'image' || msg.type == 'location')) {
+      if (msg.hops < kMaxHops && (msg.type == 'text' || msg.type == 'image')) {
         msg.hops++;
         final relayData = msg.toJson();
         for (final peerId in _nearby?.connectedEndpoints ?? <String>{}) {
@@ -287,18 +237,37 @@ class MeshService extends ChangeNotifier {
         }
       }
     } catch (e) {
-      debugPrint('[MeshService] Message handling error: $e');
+      debugPrint('[MeshService] Message error: $e');
     }
+  }
+
+  void _handleLocationUpdate(String endpointId, Map<String, dynamic> data) {
+    try {
+      final content = data['payload']?.toString();
+      if (content == null || !content.contains(',')) return;
+      final coords = content.split(',');
+      final lat = double.tryParse(coords[0]);
+      final lng = double.tryParse(coords[1]);
+      if (lat == null || lng == null) return;
+      final deviceId = _endpointToDeviceId[endpointId];
+      if (deviceId != null) {
+        final peer = _discoveredPeers[deviceId];
+        if (peer != null) {
+          peer.latitude = lat;
+          peer.longitude = lng;
+          notifyListeners();
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> sendMessage({
     required String receiverId,
     required String type,
     required String content,
+    MessagePriority priority = MessagePriority.normal,
   }) async {
     String finalPayload = content;
-
-    // Encrypt E2E payload if recipient public key is known
     if ((type == 'text' || type == 'image') && receiverId.isNotEmpty) {
       final peer = _discoveredPeers[receiverId];
       if (peer != null && peer.publicKeyHash.isNotEmpty) {
@@ -321,31 +290,30 @@ class MeshService extends ChangeNotifier {
       timestamp: DateTime.now().millisecondsSinceEpoch,
       ttl: kMessageTtl,
       hops: 0,
+      priorityIndex: priority.index,
     );
 
-    // Save locally unencrypted so sender can see it
     if (type == 'text' || type == 'image') {
       final localMsg = Message(
         id: msg.id,
         senderId: msg.senderId,
         receiverId: msg.receiverId,
         type: msg.type,
-        payload: content, // Keep original plaintext for local view
+        payload: content,
         timestamp: msg.timestamp,
         ttl: msg.ttl,
         hops: msg.hops,
+        priorityIndex: msg.priorityIndex,
       );
       await _storage.saveMessage(localMsg);
     }
 
     final data = msg.toJson();
-
     if (receiverId.isEmpty) {
-      // Broadcast (like location)
       await _nearby?.sendToAll(data);
     } else {
       final endpointId = _deviceIdToEndpoint[receiverId];
-      if (endpointId != null && _nearby?.connectedEndpoints.contains(endpointId) == true) {
+      if (endpointId != null) {
         await _nearby?.sendMessage(endpointId, data);
       } else {
         await _nearby?.sendToAll(data);
@@ -355,8 +323,8 @@ class MeshService extends ChangeNotifier {
 
   @override
   void dispose() {
-    _locationTimer?.cancel();
     _nearby?.stop();
+    _location.stop();
     super.dispose();
   }
 }

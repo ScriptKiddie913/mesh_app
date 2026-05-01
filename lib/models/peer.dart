@@ -21,12 +21,20 @@ class Peer extends HiveObject {
   @HiveField(5)
   bool connected;
 
+  @HiveField(6)
+  double latitude;
+
+  @HiveField(7)
+  double longitude;
+
   Peer({
     required this.id,
     required this.username,
     required this.publicKeyHash,
-    this.signalStrength = 0.0,
+    this.signalStrength = -100.0,
     required this.lastSeen,
     this.connected = false,
+    this.latitude = 0.0,
+    this.longitude = 0.0,
   });
 }

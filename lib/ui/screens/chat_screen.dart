@@ -1,12 +1,15 @@
-import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:image_picker/image_picker.dart';
-import '../../services/mesh_service.dart';
-import '../../services/crypto_service.dart';
-import '../../services/storage_service.dart';
+import 'package:intl/intl.dart';
 import '../../models/peer.dart';
+import '../../models/message.dart';
+import '../../models/enums.dart';
+import '../../services/mesh_service.dart';
+import '../../services/storage_service.dart';
+import 'dart:convert';
+import 'package:image_picker/image_picker.dart';
+import '../../utils/theme.dart';
+import '../widgets/mesh_widgets.dart';
 
 class ChatScreen extends StatefulWidget {
   final Peer peer;
@@ -19,354 +22,274 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
-
-  @override
-  void dispose() {
-    _messageController.dispose();
-    _scrollController.dispose();
-    super.dispose();
-  }
+  final _imagePicker = ImagePicker();
+  MessagePriority _priority = MessagePriority.normal;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              widget.peer.username.toUpperCase(),
-              style: const TextStyle(letterSpacing: 1.5, fontSize: 16),
-            ),
-            Text(
-              widget.peer.connected ? 'LINK SECURE' : 'OFFLINE',
-              style: TextStyle(
-                fontSize: 10,
-                letterSpacing: 1.0,
-                color: widget.peer.connected ? const Color(0xFF00D1FF) : const Color(0xFF8892B0),
-              ),
-            ),
-          ],
-        ),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1.0),
-          child: Container(
-            color: const Color(0xFF00D1FF).withValues(alpha: 0.3),
-            height: 1.0,
+      backgroundColor: MeshTheme.bg0,
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(64),
+        child: Container(
+          decoration: const BoxDecoration(
+            color: MeshTheme.bg1,
+            border: Border(bottom: BorderSide(color: MeshTheme.accent, width: 1)),
           ),
-        ),
-        actions: [
-          Icon(
-            widget.peer.connected ? Icons.satellite_alt : Icons.satellite_alt_outlined,
-            size: 16,
-            color: widget.peer.connected ? const Color(0xFF00D1FF) : const Color(0xFF8892B0),
-          ),
-          const SizedBox(width: 16),
-        ],
-      ),
-      body: Column(
-        children: [
-          // Connection warning
-          if (!widget.peer.connected)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-              color: const Color(0xFFFF4D4F).withValues(alpha: 0.1),
-              child: const Row(
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
                 children: [
-                  Icon(Icons.warning_amber_rounded, color: Color(0xFFFF4D4F), size: 16),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'UPLINK SEVERED. MESSAGES QUEUED FOR TRANSMISSION.',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: Color(0xFFFF4D4F),
-                        letterSpacing: 1.0,
-                      ),
-                    ),
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back, color: MeshTheme.textPri),
+                    onPressed: () => Navigator.pop(context),
                   ),
+                  const SizedBox(width: 8),
+                  Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.peer.username.toUpperCase(),
+                        style: const TextStyle(
+                          fontFamily: MeshTheme.fontMono,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 2,
+                        ),
+                      ),
+                      StatusBadge(
+                        label: widget.peer.connected ? 'SECURE LINK' : 'OFFLINE',
+                        color: widget.peer.connected ? MeshTheme.accentG : MeshTheme.textDim,
+                        blink: widget.peer.connected,
+                      ),
+                    ],
+                  ),
+                  const Spacer(),
+                  const Icon(Icons.security, color: MeshTheme.accent, size: 20),
                 ],
               ),
             ),
-          // Message list
+          ),
+        ),
+      ),
+      body: Column(
+        children: [
           Expanded(
             child: Consumer<StorageService>(
               builder: (context, storage, child) {
-                final messages = storage
-                    .getMessages(peerId: widget.peer.id)
-                    .where((m) => m.type != 'marker')
-                    .toList()
-                  ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
-
-                if (messages.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.chat_bubble_outline,
-                            size: 64,
-                            color: const Color(0xFF3A86FF).withValues(alpha: 0.2)),
-                        const SizedBox(height: 16),
-                        const Text(
-                          'NO COMMS LOGGED',
-                          style: TextStyle(
-                            color: Color(0xFF8892B0),
-                            letterSpacing: 1.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-
+                final messages = storage.getMessages(peerId: widget.peer.id);
+                WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+                
                 return ListView.builder(
                   controller: _scrollController,
-                  reverse: true,
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(MeshTheme.s4),
                   itemCount: messages.length,
                   itemBuilder: (context, i) {
-                    final msg = messages[messages.length - 1 - i];
+                    final msg = messages[i];
                     final isMe = msg.senderId == storage.getDeviceId();
-                    return Align(
-                      alignment:
-                          isMe ? Alignment.centerRight : Alignment.centerLeft,
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(vertical: 4),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 10),
-                        constraints: BoxConstraints(
-                          maxWidth: MediaQuery.of(context).size.width * 0.75,
-                        ),
-                        decoration: BoxDecoration(
-                          color: isMe 
-                              ? const Color(0xFF3A86FF).withValues(alpha: 0.15) 
-                              : const Color(0xFF112240),
-                          border: Border.all(
-                            color: isMe
-                                ? const Color(0xFF00D1FF).withValues(alpha: 0.5)
-                                : const Color(0xFF3A86FF).withValues(alpha: 0.3),
-                          ),
-                          borderRadius: BorderRadius.only(
-                            topLeft: const Radius.circular(12),
-                            topRight: const Radius.circular(12),
-                            bottomLeft: Radius.circular(isMe ? 12 : 2),
-                            bottomRight: Radius.circular(isMe ? 2 : 12),
-                          ),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            if (msg.type == 'image')
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.memory(
-                                  _decodeImageBytes(msg.payload, storage),
-                                  width: 200,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) => Container(
-                                    width: 200,
-                                    height: 120,
-                                    alignment: Alignment.center,
-                                    color: const Color(0xFF0A192F),
-                                    child: const Icon(
-                                      Icons.broken_image_outlined,
-                                      color: Color(0xFFFF4D4F),
-                                    ),
-                                  ),
-                                ),
-                              )
-                            else
-                              Text(
-                                _displayPayload(msg.payload, storage),
-                                style: const TextStyle(fontSize: 14, color: Color(0xFFE6F1FF)),
-                              ),
-                            const SizedBox(height: 6),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  _formatTime(msg.timestamp),
-                                  style: TextStyle(
-                                      fontSize: 9,
-                                      letterSpacing: 1.0,
-                                      color: const Color(0xFF8892B0).withValues(alpha: 0.8)),
-                                ),
-                                if (isMe) ...[
-                                  const SizedBox(width: 4),
-                                  Icon(
-                                    msg.delivered
-                                        ? Icons.done_all
-                                        : Icons.done,
-                                    size: 12,
-                                    color: msg.delivered
-                                        ? const Color(0xFF00D1FF)
-                                        : const Color(0xFF8892B0),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
+                    return _ChatBubble(msg: msg, isMe: isMe);
                   },
                 );
               },
             ),
           ),
-          // Input bar
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: const Color(0xFF112240),
-              border: Border(
-                  top: BorderSide(color: const Color(0xFF3A86FF).withValues(alpha: 0.2))),
+          _buildInputArea(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInputArea() {
+    return Container(
+      padding: const EdgeInsets.all(MeshTheme.s4),
+      decoration: const BoxDecoration(
+        color: MeshTheme.bg1,
+        border: Border(top: BorderSide(color: MeshTheme.border)),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.add_a_photo_outlined, color: MeshTheme.accent),
+            onPressed: _sendImage,
+          ),
+          GestureDetector(
+            onTap: _showPriorityPicker,
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                border: Border.all(color: _colorFor(_priority), width: 1),
+              ),
+              child: Icon(Icons.flag, color: _colorFor(_priority), size: 20),
             ),
-            child: SafeArea(
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.image_outlined, color: Color(0xFF3A86FF)),
-                    onPressed: _sendImage,
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: _messageController,
-                      style: const TextStyle(fontSize: 14),
-                      decoration: InputDecoration(
-                        hintText: 'TYPE MESSAGE...',
-                        hintStyle: const TextStyle(
-                          color: Color(0xFF8892B0),
-                          letterSpacing: 1.0,
-                          fontSize: 12,
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(20),
-                          borderSide: BorderSide.none,
-                        ),
-                        filled: true,
-                        fillColor: const Color(0xFF0A192F),
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 10),
-                      ),
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _sendText(),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: const Color(0xFF00D1FF).withValues(alpha: 0.3),
-                          blurRadius: 8,
-                        ),
-                      ],
-                    ),
-                    child: CircleAvatar(
-                      backgroundColor: const Color(0xFF3A86FF),
-                      radius: 20,
-                      child: IconButton(
-                        icon: const Icon(Icons.send, color: Colors.white, size: 18),
-                        onPressed: _sendText,
-                      ),
-                    ),
-                  ),
-                ],
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: TextField(
+              controller: _messageController,
+              style: const TextStyle(color: MeshTheme.textPri),
+              decoration: const InputDecoration(
+                hintText: 'SECURE UPLINK...',
+                hintStyle: TextStyle(color: MeshTheme.textDim, fontSize: 12),
+                border: InputBorder.none,
               ),
             ),
+          ),
+          TacticalButton(
+            label: 'SEND',
+            onTap: _sendMessage,
+            icon: Icons.send,
+            filled: true,
           ),
         ],
       ),
     );
   }
 
-  String _formatTime(int timestamp) {
-    final dt = DateTime.fromMillisecondsSinceEpoch(timestamp);
-    return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  void _showPriorityPicker() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: MeshTheme.bg1,
+      builder: (_) => Container(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('UPLINK PRIORITY', style: TextStyle(fontFamily: MeshTheme.fontMono, letterSpacing: 2)),
+            const SizedBox(height: 16),
+            ...MessagePriority.values.map((p) => ListTile(
+              onTap: () {
+                setState(() => _priority = p);
+                Navigator.pop(context);
+              },
+              leading: Container(width: 12, height: 12, color: _colorFor(p)),
+              title: Text(p.name.toUpperCase(), style: TextStyle(fontFamily: MeshTheme.fontMono, color: _colorFor(p))),
+            )),
+          ],
+        ),
+      ),
+    );
   }
 
-  Future<void> _sendText() async {
+  void _sendMessage() {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
 
-    _messageController.clear();
-
-    if (!mounted) return;
-    final meshService = context.read<MeshService>();
-    await meshService.sendMessage(
+    context.read<MeshService>().sendMessage(
       receiverId: widget.peer.id,
       type: 'text',
       content: text,
+      priority: _priority,
     );
+    
+    _messageController.clear();
+    setState(() => _priority = MessagePriority.normal);
   }
 
   Future<void> _sendImage() async {
-    try {
-      final picker = ImagePicker();
-      final image = await picker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 800,
-        imageQuality: 50,
-      );
-      if (image == null || !mounted) return;
+    final XFile? image = await _imagePicker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 50, // Compress for mesh transmission
+    );
+    
+    if (image == null) return;
+    final bytes = await image.readAsBytes();
+    final base64Image = base64Encode(bytes);
 
-      final bytes = await image.readAsBytes();
-      final base64Image = base64Encode(bytes);
-
-      final meshService = context.read<MeshService>();
-      await meshService.sendMessage(
+    if (mounted) {
+      context.read<MeshService>().sendMessage(
         receiverId: widget.peer.id,
         type: 'image',
         content: base64Image,
+        priority: _priority,
       );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to send image: $e')),
-        );
-      }
     }
   }
 
-  String _displayPayload(String payload, StorageService storage) {
-    return _tryDecryptPayload(payload, storage);
-  }
-
-  Uint8List _decodeImageBytes(String payload, StorageService storage) {
-    final decodedPayload = _tryDecryptPayload(payload, storage);
-    try {
-      return base64Decode(decodedPayload);
-    } catch (_) {
-      return Uint8List(0);
+  void _scrollToBottom() {
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
     }
   }
 
-  String _tryDecryptPayload(String payload, StorageService storage) {
-    if (!_looksEncrypted(payload)) {
-      return payload;
-    }
+  Color _colorFor(MessagePriority p) => switch (p) {
+    MessagePriority.critical  => MeshTheme.accentR,
+    MessagePriority.important => MeshTheme.accentY,
+    _                         => MeshTheme.accent,
+  };
+}
 
-    final keyPair = storage.getKeyPair();
-    if (keyPair == null) {
-      return payload;
-    }
+class _ChatBubble extends StatelessWidget {
+  final Message msg;
+  final bool isMe;
 
-    return CryptoService.decryptPayload(
-      encryptedPayloadB64: payload,
-      privateKey: keyPair.privateKey,
+  const _ChatBubble({required this.msg, required this.isMe});
+
+  @override
+  Widget build(BuildContext context) {
+    final priorityColor = _priorityColor(msg.priorityIndex);
+    final isImage = msg.type == 'image';
+    
+    return Align(
+      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.all(12),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+        decoration: BoxDecoration(
+          color: isMe ? MeshTheme.accent.withOpacity(0.08) : MeshTheme.bg2,
+          border: Border(
+            left: BorderSide(color: isMe ? MeshTheme.accent : MeshTheme.textSec, width: 2),
+            right: msg.priorityIndex > 0 ? BorderSide(color: priorityColor, width: 2) : BorderSide.none,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (isImage)
+              _buildImageContent()
+            else
+              Text(msg.payload, style: const TextStyle(fontSize: 14, color: MeshTheme.textPri)),
+            const SizedBox(height: 6),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  DateFormat('HH:mm:ss').format(DateTime.fromMillisecondsSinceEpoch(msg.timestamp)),
+                  style: const TextStyle(fontFamily: MeshTheme.fontMono, fontSize: 9, color: MeshTheme.textDim),
+                ),
+                if (isMe) ...[
+                  const SizedBox(width: 4),
+                  Icon(Icons.done_all, size: 10, color: msg.delivered ? MeshTheme.accentG : MeshTheme.textDim),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 
-  bool _looksEncrypted(String payload) {
+  Widget _buildImageContent() {
     try {
-      final decoded = utf8.decode(base64Decode(payload));
-      final json = jsonDecode(decoded);
-      return json is Map<String, dynamic> && json['encrypted'] == true;
+      return Image.memory(
+        base64Decode(msg.payload),
+        errorBuilder: (_, __, ___) => const Text('[IMAGE DATA CORRUPTED]', style: TextStyle(color: MeshTheme.accentR, fontSize: 12)),
+      );
     } catch (_) {
-      return false;
+      return const Text('[IMAGE DECRYPTION FAILED]', style: TextStyle(color: MeshTheme.accentR, fontSize: 12));
     }
   }
+
+  Color _priorityColor(int index) => switch (index) {
+    2 => MeshTheme.accentR,
+    1 => MeshTheme.accentY,
+    _ => Colors.transparent,
+  };
 }
